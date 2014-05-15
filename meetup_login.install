@@ -1,0 +1,180 @@
+<?php
+/**
+ * @file
+ * Install, update and uninstall functions for the meetup module.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function meetup_login_schema() {
+  $schema['meetup_account'] = array(
+    'description' => "Stores information on specific meetup user accounts.",
+    'fields' => array(
+      'meetup_uid' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'oauth_token' => array(
+        'description' => 'The token_key for oauth-based access.',
+        'type' => 'varchar',
+        'length' => 64,
+      ),
+      'name' => array(
+        'description' => "The name of the {meetup_account} user.",
+        'type' => 'varchar',
+        'length' => 64,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'city' => array(
+        'description' => "The city of the {meetup_account} .",
+        'type' => 'varchar',
+        'length' => 255,
+      ),
+      'country' => array(
+        'description' => "The country of the {meetup_account}'s profile image.",
+        'type' => 'varchar',
+        'length' => 255,
+      ),
+      'uid' => array(
+        'description' => "The uid of the user who added this meetup account.",
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'id' => array(
+        'description' => "The id of the user who added this meetup account.",
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not snull' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'indexes' => array('name' => array('name')),
+    'primary key' => array('meetup_uid'),
+  );
+  return $schema;
+}
+/**
+ * Implements hook_install().
+ */
+function meetup_login_install() {
+  $path = variable_get('meetup_login_local_path');
+  $link = 'Meetup.php';
+  $file = $path . '/' . $link;
+  if (!file_exists($file)) {
+    drupal_set_message("The Meetup library was not found. please download the library from https://github.com/blobaugh/Meetup-API-client-for-PHP/tree/804a5e9b0b82b1697321d5e57b7e4674d3aff025 and configure the path", 'error');
+  }
+}
+/**
+ * Implements hook_uninstall().
+ */
+function meetup_login_uninstall() {
+  // Remove variables.
+  variable_del('meetup_import');
+  variable_del('meetup_expire');
+  variable_del('meetup_login_consumer_key');
+  variable_del('meetup_login_consumer_secret');
+  variable_del('meetup_host');
+  variable_del('meetup_login_button');
+  variable_del('meetup_login_register');
+  variable_del('meetup_host');
+  variable_del('meetup_api');
+  variable_del('meetup_search');
+  variable_del('meetup_tinyurl');
+  variable_del('meetup_login_group_url');
+  variable_del('meetup_login_redirect_url');
+  variable_del('meetup_login_local_path');
+}
+
+/**
+ * Removes password field.
+ */
+function meetup_login_update_7300() {
+  db_drop_field('meetup_account', 'password');
+  return t('The Meetup library was not found. Please extract the Meetup library from');
+}
+
+/**
+ * Adds field mentions to meetup_account table.
+ */
+function meetup_login_update_7400() {
+  $data = array(
+    'description' => "Boolean flag indicating whether the {meetup_user}'s mentions should be pulled in by the site.",
+    'type' => 'int',
+    'unsigned' => TRUE,
+    'not null' => TRUE,
+    'default' => 0,
+  );
+  db_add_field('meetup_account', 'mentions', $data);
+}
+
+/**
+ * Makes the import field not enabled by default at meetup_account table.
+ */
+function meetup_login_update_7402() {
+  $spec = array(
+    'description' => "Boolean flag indicating whether the {meetup_user}'s posts should be pulled in by the site.",
+    'type' => 'int',
+    'unsigned' => TRUE,
+    'not null' => TRUE,
+    'default' => 0,
+  );
+
+  db_change_field('meetup_account', 'import', 'import', $spec);
+}
+
+
+/**
+ * Renames meetup_account.added_by_uid to meetup_account.uid.
+ *
+ * This reverts update 7403.
+ */
+function meetup_login_update_7500() {
+  if (db_field_exists('meetup_account', 'added_by_uid')) {
+    $spec = array(
+      'description' => "The uid of the user who added this meetup account.",
+      'type' => 'int',
+      'unsigned' => TRUE,
+      'not null' => TRUE,
+      'default' => 0,
+    );
+    db_change_field('meetup_account', 'added_by_uid', 'uid', $spec);
+  }
+}
+/**
+ * Implements hook_requirements().
+ */
+function meetup_login_requirements($phase) {
+  $requirements = array();
+  if ($phase == 'runtime') {
+    $t = get_t();
+    $requirements['meetup_login'] = array(
+      'title' => $t('Meetup Library'),
+    );
+    $path = variable_get('meetup_login_local_path');
+    $link = 'Meetup.php';
+    $file = $path . '/' . $link;
+    if (file_exists($file)) {
+      $meetup_install = TRUE;
+    }
+    else {
+      $meetup_install = FALSE;
+    }
+    if ($meetup_install) {
+      $requirements['meetup_login']['value'] = $t('Installed');
+      $requirements['meetup_login']['severity'] = REQUIREMENT_OK;
+    }
+    else {
+      $requirements['meetup_login']['value'] = $t('Not Installed');
+      $requirements['meetup_login']['severity'] = REQUIREMENT_ERROR;
+      $requirements['meetup_login']['description'] = $t('The Meetup library was not found.
+      Please extract the Meetup library to sites/all/libraries/meetup_login so that the Meetup.php file  is located at sites/all/libraries/meetup_login/.You can download the Meetup  library at
+      %url.', array('%url' => 'https://github.com/blobaugh/Meetup-API-client-for-PHP/tree/804a5e9b0b82b1697321d5e57b7e4674d3aff025'));
+    }
+  }
+  return $requirements;
+}

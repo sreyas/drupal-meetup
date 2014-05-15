@@ -1,0 +1,494 @@
+<?php
+/**
+ * @file
+ * Provides API integration with the Meetup microblogging service.
+ */
+
+define('MEETUP_LOGIN_MEETUP_HOST', 'http://meetup.com');
+define('MEETUP_LOGIN_MEETUP_API', 'https://api.meetup.com');
+define('MEETUP_LOGIN_MEETUP_SEARCH', 'http://search.meetup.com');
+define('MEETUP_LOGIN_MEETUP_TINYURL', 'http://tinyurl.com');
+/**
+ * Implements hook_menu().
+ */
+function meetup_login_menu() {
+  $items['meetup_token'] = array(
+    'title' => 'Meetup Token',
+    'access callback' => TRUE,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('meetup_login_token_callback'),
+    'type' => MENU_CALLBACK,
+    'file' => 'meetup_login.pages.inc',
+  );
+  $items['meetup/oauth'] = array(
+    'title' => 'Meetup OAuth',
+    'access callback' => TRUE,
+    'page callback' => 'meetup_login_oauth_callback',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+    'file' => 'meetup_login.pages.inc',
+  );
+  $items['meetup/redirect'] = array(
+    'title' => 'Meetup Redirect',
+    'page callback' => 'meetup_login_redirect',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+    'file' => 'meetup_login.pages.inc',
+  );
+  $items['admin/config/services/meetup'] = array(
+    'title' => 'Meetup Login',
+    'description' => 'Meetup accounts and settings.',
+    'page callback' => 'meetup_login_account_settings',
+    'access arguments' => array('administer meetup accounts'),
+    'file' => 'meetup_login.pages.inc',
+  );
+  $items['admin/config/services/meetup/default'] = array(
+    'title' => 'Meetup',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+  );
+
+  $items['admin/config/services/meetup/settings'] = array(
+    'title' => 'Settings',
+    'description' => 'Meetup settings.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('meetup_login_admin_form'),
+    'access arguments' => array('administer site configuration'),
+    'file' => 'meetup_login.pages.inc',
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/config/services/meetup/signin'] = array(
+    'title' => 'Sign-in',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('meetup_login_admin_settings_form'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 5,
+  );
+  $items['admin/config/services/meetup/delete/%'] = array(
+    'title' => 'Delete',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('meetup_login_delete_form', 5),
+    'access arguments' => array('administer site configuration'),
+    'file' => 'meetup_login.pages.inc',
+  );
+  $items['admin/config/services/meetup/unlink/%'] = array(
+    'title' => 'Delete',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('meetup_login_unlink_form', 5),
+    'access arguments' => array('administer site configuration'),
+    'file' => 'meetup_login.pages.inc',
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_init().
+ */
+function meetup_login_init() {
+  drupal_add_js(array('basepath' => base_path()), 'setting');
+
+}
+/**
+ * Settings form for Meetup Signin.
+ */
+function meetup_login_admin_settings_form($form, &$form_state) {
+  $form = array();
+  $img_path = drupal_get_path('module', 'meetup_login') . '/images/meetup';
+  $results = file_scan_directory($img_path, '/.*.png$/i');
+  $options = array();
+  foreach ($results as $image) {
+    $options[$image->filename] = theme('image', array('path' => $image->uri));
+  }
+  $form['meetup_login_button'] = array(
+    '#type' => 'radios',
+    '#title' => t('Select sign-in button'),
+    '#options' => $options,
+    '#default_value' => variable_get('meetup_login_signin_button', 'Sign-in-with-Meetup-lighter-small.png'),
+  );
+  $form['meetup_login_register'] = array(
+    '#title' => t('Automatically register new users'),
+    '#type' => 'radios',
+    '#options' => array(t('No'), t('Yes')),
+    '#default_value' => variable_get('meetup_login_register', 0),
+    '#description' => t('Warning, if you enable this, new user accounts will be created without email addresses.'),
+  );
+  return system_settings_form($form);
+}
+/**
+ * Wrapper to call drupal_form_submit().
+ */
+function meetup_login_admin_settings_form_submit($form, &$form_state) {
+  $meetup_login_button = $form_state['values']['meetup_login_button'];
+  $meetup_login_register = $form_state['values']['meetup_login_register'];
+  variable_set('meetup_login_signin_button', $meetup_login_button);
+  variable_set('meetup_login_register', $meetup_login_register);
+  drupal_set_message(t("The configuration options have been saved."));
+}
+/**
+ * Checks if the Meetup Application keys are set.
+ *
+ *   boolean TRUE if both the Meetup Application key and secret are set.
+ */
+function meetup_login_api_keys() {
+  $key = variable_get('meetup_login_consumer_key');
+  $secret = variable_get('meetup_consumer_secret');
+  return !(empty($key) && empty($secret));
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function meetup_login_block_info() {
+  $block[0]['info'] = t('Sign in with Meetup');
+  return $block;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function meetup_login_block_view($delta) {
+  if (!user_is_logged_in()) {
+    $block['subject'] = t('Sign in with Meetup');
+    $block['content'] = meetup_login_button();
+    return $block;
+  }
+}
+
+/**
+ * Returns an image link for signing in with Meetup.
+ */
+function meetup_login_button() {
+  return theme('meetup_login_button');
+}
+
+/**
+ * Implements hook_theme().
+ */
+function meetup_login_theme() {
+  return array(
+    'meetup_login_button' => array(),
+  );
+}
+
+/**
+ * Themable function for an image link for signing in with Meetup.
+ */
+function theme_meetup_login_button() {
+  $img = drupal_get_path('module', 'meetup_login') . '/images/meetup/' . variable_get('meetup_login_signin_button', 'Sign-in-with-Meetup-lighter-small.png');
+  return l(theme('image', array('path' => $img, 'alt' => t('Sign in with Meetup'))), 'meetup/redirect', array('html' => TRUE));
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function meetup_login_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'meetup_login_oauth_callback_form') {
+    $form['#submit'] = array_merge(array('meetup_login_oauth_callback_submit'), $form['#submit']);
+  }
+  if ($form_id == 'user_login' || $form_id == 'user_login_block') {
+    $login = isset($_GET['meetup']) ? $_GET['meetup'] : '';
+    $msg = 'Please log in or register to relate your Meetup account with a user.';
+    if ($login == 'login') {
+      drupal_set_message(t('@var', array('@var' => $msg)));
+    }
+    $img = drupal_get_path('module', 'meetup_login') . '/images/meetup/' . variable_get('meetup_login_signin_button', 'Sign-in-with-Meetup-lighter-small.png');
+    $image = theme('image', array('path' => $img, 'alt' => t('Sign in with Meetup')));
+    $key = variable_get('meetup_login_consumer_key', '');
+    if (isset($key)) {
+      $form['meetup_signin'] = array(
+        '#prefix' => '<div id = "meetup-connect">',
+        '#markup' => $image,
+        '#suffix' => '</div>',
+      );
+    }
+  }
+  $meetupdes = isset($_GET['meetup']) ? $_GET['meetup'] : '';
+  if ($form_id == 'user_profile_form' && $meetupdes == 'useredit') {
+    $form['#submit'][] = 'meetup_login_user_form_redirect';
+    $msg = drupal_set_message(t('Your user account is created, please make sure you update password and email address now itself.'));
+  }
+  elseif ($form_id == 'user_register_form' && isset($_SESSION['meetup']['values'])) {
+    $form['auth_meetup'] = array(
+      '#type' => 'hidden',
+      '#value' => $_SESSION['meetup']['values']['member_id'],
+    );
+  }
+}
+/**
+ * Form submit for the userform callback.
+ */
+function meetup_login_user_form_redirect(&$form, &$form_state) {
+  global $user;
+  $uid = $user->uid;
+  $form_state['redirect'] = '/user/' . $uid;
+}
+/**
+ * Form submit for the OAuth callback. Here we add in sign-in specific handling.
+ */
+function meetup_login_oauth_callback_submit(&$form, &$form_state) {
+  global $user;
+  variable_set('meetup_login_user_uid', $user->uid);
+  $success = FALSE;
+  $response = $form_state['response'];
+  $account = user_external_load($response['member_id']);
+  if (isset($account->uid)) {
+    user_external_login($account, $response);
+    $success = TRUE;
+  }
+  elseif ($uid = db_query("SELECT uid FROM {meetup_account} WHERE id = :id",
+          array(':id' => $response['member_id']))->fetchField()) {
+    $account = user_load($uid);
+    $edit["authname_meetup"] = $response['member_id'];
+    $instances = field_info_instances('user', 'user');
+    foreach ($instances as $field_name => $instance) {
+      $values = variable_get($field_name);
+      if ($instance['widget']['type'] == 'link_field') {
+        if ($values == 'twitter') {
+          $response[$values] = isset($response[$values]) ? $response[$values] : '';
+          $explode = explode('@', $response[$values]);
+          $title = $explode[1];
+          $url = 'https://twitter.com/' . $title;
+        }
+        elseif ($values == 'flickr') {
+          $title = 'Flicker';
+          $url = $response[$values];
+        }
+        elseif ($values == 'facebook') {
+          $title = 'Facebook';
+          $url = 'https://www.facebook.com/' . $response[$values];
+        }
+        $title = isset($title) ? $title : '';
+        $url = isset($url) ? $url : '';
+        $fields[$field_name] = array('und' => array(0 => array('title' => $title, 'url' => $url)));
+      }
+      elseif ($instance['widget']['type'] == 'text_textfield') {
+        if ($values == 'facebook') {
+          $response[$values] = 'https://www.facebook.com/' . $response[$values];
+        }
+        elseif ($values == 'flickr') {
+          $response[$values] = $response[$values];
+        }
+        elseif ($values == 'twitter') {
+          $response[$values] = 'https://twitter.com/' . $response[$values];
+        }
+        $fields[$field_name] = array('und' => array(0 => array('value' => $response[$values])));
+      }
+      else {
+        $fields[$field_name] = array('und' => array(0 => array('value' => $response[$values])));
+      }
+    }
+    if (isset($fields)) {
+      $edit = array_merge($edit, $fields);
+    }
+    user_save($account, $edit);
+    $user = $account;
+    variable_set('meetup_auth_account', $account);
+    $success = TRUE;
+  }
+  else {
+    if (variable_get('meetup_login_register', 0)) {
+      $account = array_shift(user_load_multiple(array(), array('name' => $response['member_id'])));
+      $instances = field_info_instances('user', 'user');
+      foreach ($instances as $field_name => $instance) {
+        $values = variable_get($field_name);
+        if ($instance['widget']['type'] == 'link_field') {
+          if ($values == 'twitter') {
+            $response[$values] = isset($response[$values]) ? $response[$values] : '';
+            $explode = explode('@', $response[$values]);
+            $title = $explode[1];
+            $url = 'https://twitter.com/' . $title;
+          }
+          elseif ($values == 'flickr') {
+            $title = 'Flicker';
+            $url = $response[$values];
+          }
+          elseif ($values == 'facebook') {
+            $title = 'Facebook';
+            $url = 'https://www.facebook.com/' . $response[$values];
+          }
+          $title = isset($title) ? $title : '';
+          $url = isset($url) ? $url : '';
+          $fields[$field_name] = array('und' => array(0 => array('title' => $title, 'url' => $url)));
+        }
+        elseif ($instance['widget']['type'] == 'text_textfield') {
+          if ($values == 'facebook') {
+            $response[$values] = 'https://www.facebook.com/' . $response[$values];
+          }
+          elseif ($values == 'flickr') {
+            $response[$values] = $response[$values];
+          }
+          elseif ($values == 'twitter') {
+            $response[$values] = 'https://twitter.com/' . $response[$values];
+          }
+          $fields[$field_name] = array('und' => array(0 => array('value' => $response[$values])));
+        }
+        else {
+          $fields[$field_name] = array('und' => array(0 => array('value' => $response[$values])));
+        }
+      }
+      $image_path = $response['photo_url'];
+      $image = file_get_contents($image_path);
+      $file_name = basename($image_path);
+      $destination = 'public://' . $file_name;
+      $file = file_save_data($image, $destination, FILE_EXISTS_REPLACE);
+      if (is_object($file)) {
+        $file->status = 1;
+        $file = file_save($file);
+      }
+      $fid = isset($file->fid) ? $file->fid : '';
+      $password = meetup_login_randompassword();
+      $new_user = array(
+        'name' => $response['member_id'],
+        'pass' => $password,
+        'status' => 1,
+        'init' => $response['name'],
+        'picture' => $fid,
+      );
+      if (isset($fields)) {
+        $new_user = array_merge($new_user, $fields);
+      }
+      else {
+        $new_user = $new_user;
+      }
+      if (empty($account->uid)) {
+        $account = user_save('', $new_user);
+        $user = $account;
+        variable_set($account->name, $password);
+        $form_state['meetup_auth_account']['account'] = $account;
+        drupal_set_message(t('Change your password and enter your email address'));
+        $success = TRUE;
+      }
+      else {
+        drupal_set_message(t('The nickname %name is already in use on this site, please register below with a new nick name, or @login to continue.',
+        array(
+          '%name' => $response['name'],
+          '@login' => url('user/login'),
+        )
+        ), 'warning');
+      }
+    }
+    else {
+    }
+  }
+  if ($success == 1) {
+    user_login_finalize();
+  }
+  else {
+    variable_set('meetup_login_informations', $response);
+    $_SESSION['meetup_login_informations'] = $response;
+    $options = array('query' => array('meetup' => 'login'));
+    drupal_goto('user/login', $options);
+  }
+
+}
+/**
+ * Generate Random password.
+ */
+function meetup_login_randompassword() {
+  $alphabet = "abcdefghijklmnopqrstuwxyzABCDEFGHIJKLMNOPQRSTUWXYZ0123456789";
+  $pass = array();
+  $alphalength = strlen($alphabet) - 1;
+  for ($i = 0; $i < 8; $i++) {
+    $n = rand(0, $alphalength);
+    $pass[] = $alphabet[$n];
+  }
+  return implode($pass);
+}
+
+/**
+ * Implements hook_user_delete().
+ */
+function meetup_login_user_delete($account) {
+  db_delete('meetup_account')->condition('uid', $account->uid)->execute();
+}
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function meetup_login_form_user_profile_form_alter(&$form, &$form_state) {
+  global $user;
+  $account = user_load($user->uid);
+  if (empty($account->mail)) {
+    $form['account']['current_pass']['#attributes'] = array('value' => variable_get($user->name));
+  }
+}
+/**
+ * Implements hook_user_view_alter().
+ *
+ * Adds Meetup account information to the user profile.
+ */
+function meetup_login_user_view_alter(&$build) {
+  $user = $build['#account'];
+  $uid = $user->uid;
+  $meetup_accounts = db_select('meetup_account', 'ma')
+    ->fields('ma')
+    ->condition('uid', $uid, '=')
+    ->execute()
+    ->fetchAssoc();
+  if (!empty($meetup_accounts)) {
+    $name = $meetup_accounts['name'];
+    $link = 'http://www.meetup.com/members/' . $meetup_accounts['id'];
+    $items[] = l($name, $link);
+    $build['meetup'] = array(
+      '#type' => 'user_profile_item',
+      '#title' => t('Meetup accounts'),
+      '#markup' => theme('item_list', array('items' => $items)),
+      '#weight' => 10,
+    );
+  }
+}
+/**
+ * Implements hook_user_insert().
+ *
+ * Relates a Meetup account with a just created user account if the user
+ * signed in with Meetup but did not have an account in the site yet.
+ */
+function meetup_login_user_insert(&$edit, $account, $category) {
+  _meetup_login_add_account($edit, $account);
+}
+
+
+/**
+ * Implements hook_user_login().
+ *
+ * Relates a Meetup account with an existing user account if the user
+ * signed in with Meetup.
+ */
+function meetup_login_user_login(&$edit, $account) {
+  _meetup_login_add_account($edit, $account);
+}
+/**
+ * Relates a user account with a Meetup account.
+ *
+ *   The Drupal user account.
+ */
+function _meetup_login_add_account($edit, $account) {
+  module_load_include('inc', 'meetup_login', 'meetup_login.pages');
+  $meetup_account = array();
+  $meetup_login_info = variable_get('meetup_login_informations', '');
+  if (isset($meetup_login_info)) {
+    $meetup_account = $meetup_login_info;
+  }
+  $meetup_account['uid'] = $account->uid;
+  meetup_login_account_save($meetup_account, TRUE);
+  unset($_SESSION['meetup_login_informations']);
+  variable_set('meetup_login_informations', '');
+}
+
+/**
+ * Implements hook_user_view().
+ *
+ * Relates a Meetup messsage with an existing user account if the user
+ * signed in with Meetup.
+ */
+function meetup_login_user_view($account, $view_mode) {
+  unset($_SESSION['messages']);
+  $meetupdes = isset($_GET['meetup']) ? $_GET['meetup'] : '';
+  $login = $account->login;
+  $created = $account->created;
+  $login_date = date("Y-m-d", $login);
+  $created_date = date("Y-m-d", $created);
+  if ($meetupdes == 'userview' && ($login_date == $created_date)) {
+    $msg = "You  have  already created a meetup account.";
+    drupal_set_message(t('%title.', array('%title' => $msg)));
+  }
+}

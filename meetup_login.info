@@ -1,0 +1,7 @@
+name = Meetup Login 
+description = Provides a Drupal login with meetup api.
+core = 7.x
+scripts[]= js/meetup_login.js
+configure = admin/config/services/meetup/settings
+dependencies[] = libraries
+package = Meetup
